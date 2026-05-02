@@ -335,8 +335,8 @@ The LSTM model will train on historical closing prices and predict future values
             st.markdown(f"""
 <div class="metric-card">
 <div class="label">Layer 1</div>
-<div class="value blue" style="font-size:1rem">LSTM (64 units)</div>
-<div style="color:#64748b;font-size:0.75rem;margin-top:0.3rem">return_sequences=True</div>
+<div class="value blue" style="font-size:1rem">Dense (128 units)</div>
+<div style="color:#64748b;font-size:0.75rem;margin-top:0.3rem">ReLU Activation</div>
 </div>
 """, unsafe_allow_html=True)
             st.markdown(f"""
@@ -350,25 +350,24 @@ The LSTM model will train on historical closing prices and predict future values
             st.markdown(f"""
 <div class="metric-card">
 <div class="label">Layer 2</div>
-<div class="value purple" style="font-size:1rem">LSTM (64 units)</div>
-<div style="color:#64748b;font-size:0.75rem;margin-top:0.3rem">return_sequences=False</div>
+<div class="value purple" style="font-size:1rem">Dense (64 units)</div>
+<div style="color:#64748b;font-size:0.75rem;margin-top:0.3rem">ReLU Activation</div>
 </div>
 """, unsafe_allow_html=True)
             st.markdown(f"""
 <div class="metric-card">
-<div class="label">Layer 4</div>
+<div class="label">Output</div>
 <div class="value purple" style="font-size:1rem">Dense (1 unit)</div>
-<div style="color:#64748b;font-size:0.75rem;margin-top:0.3rem">Output — Close Price</div>
+<div style="color:#64748b;font-size:0.75rem;margin-top:0.3rem">Close Price Prediction</div>
 </div>
 """, unsafe_allow_html=True)
 
     else:
         # ─── Train Model ───────────────────────────────────────────────────────
-        import tensorflow as tf
-        from tensorflow import keras
         from sklearn.preprocessing import MinMaxScaler
+        from sklearn.neural_network import MLPRegressor
 
-        st.markdown(f"#### 🚀 Training LSTM on **{company}** — {epochs} epochs, {lookback}-day window")
+        st.markdown(f"#### 🚀 Training Neural Net on **{company}** — {epochs} epochs, {lookback}-day window")
 
         close_data = company_data[['close']].values
         training_len = int(np.ceil(len(close_data) * train_split))
@@ -381,48 +380,47 @@ The LSTM model will train on historical closing prices and predict future values
         for i in range(lookback, len(train)):
             x_train.append(train[i-lookback:i, 0])
             y_train.append(train[i, 0])
-        x_train = np.array(x_train).reshape(-1, lookback, 1)
+        x_train = np.array(x_train)
         y_train = np.array(y_train)
 
-        # Build model
-        model = keras.models.Sequential([
-            keras.layers.LSTM(64, return_sequences=True, input_shape=(lookback, 1)),
-            keras.layers.LSTM(64),
-            keras.layers.Dense(32),
-            keras.layers.Dropout(0.5),
-            keras.layers.Dense(1)
-        ])
-        model.compile(optimizer='adam', loss='mean_squared_error')
-
-        # Train with progress
+        # Build model - MLP Neural Network (no heavy deps, works on Streamlit Cloud)
         progress_bar = st.progress(0)
-        status      = st.empty()
-        loss_vals   = []
+        status       = st.empty()
+        loss_vals    = []
 
-        class StreamlitCallback(keras.callbacks.Callback):
-            def on_epoch_end(self, epoch, logs=None):
-                loss_vals.append(logs['loss'])
-                pct = int((epoch + 1) / epochs * 100)
-                progress_bar.progress(pct)
-                status.markdown(f"<span style='font-family:Space Mono,monospace;color:#00d4ff;font-size:0.8rem'>"
-                                f"Epoch {epoch+1}/{epochs} · Loss: {logs['loss']:.6f}</span>",
-                                unsafe_allow_html=True)
+        model = MLPRegressor(
+            hidden_layer_sizes=(128, 64, 32),
+            activation='relu',
+            solver='adam',
+            max_iter=1,
+            warm_start=True,
+            random_state=42,
+            learning_rate_init=0.001,
+        )
 
-        model.fit(x_train, y_train, epochs=epochs,
-                  batch_size=32, verbose=0,
-                  callbacks=[StreamlitCallback()])
+        for epoch in range(epochs):
+            model.fit(x_train, y_train)
+            loss = model.loss_
+            loss_vals.append(loss)
+            pct = int((epoch + 1) / epochs * 100)
+            progress_bar.progress(pct)
+            status.markdown(
+                f"<span style='font-family:Space Mono,monospace;color:#00d4ff;font-size:0.8rem'>"
+                f"Epoch {epoch+1}/{epochs} · Loss: {loss:.6f}</span>",
+                unsafe_allow_html=True)
 
-        status.markdown("<span style='color:#00e676;font-family:Space Mono,monospace;font-size:0.8rem'>✓ Training complete!</span>",
-                        unsafe_allow_html=True)
+        status.markdown(
+            "<span style='color:#00e676;font-family:Space Mono,monospace;font-size:0.8rem'>✓ Training complete!</span>",
+            unsafe_allow_html=True)
 
         # ─── Predict ───────────────────────────────────────────────────────────
         test_input = scaled[training_len - lookback:, :]
         x_test = []
         for i in range(lookback, len(test_input)):
             x_test.append(test_input[i-lookback:i, 0])
-        x_test = np.array(x_test).reshape(-1, lookback, 1)
+        x_test = np.array(x_test)
 
-        predictions = scaler.inverse_transform(model.predict(x_test))
+        predictions = scaler.inverse_transform(model.predict(x_test).reshape(-1, 1))
         y_test      = close_data[training_len:]
 
         mse  = np.mean((predictions - y_test) ** 2)
